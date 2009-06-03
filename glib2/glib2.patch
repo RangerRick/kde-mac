@@ -1,0 +1,270 @@
+diff -Nurd -x'*~' glib-2.18.4.orig/configure glib-2.18.4/configure
+--- glib-2.18.4.orig/configure	2009-01-09 11:42:57.000000000 -0500
++++ glib-2.18.4/configure	2009-01-09 15:50:30.000000000 -0500
+@@ -4708,7 +4708,7 @@
+ #define HAVE_CARBON 1
+ _ACEOF
+ 
+-  LDFLAGS="$LDFLAGS -framework Carbon"
++  LDFLAGS="$LDFLAGS -Wl,-framework,Carbon"
+ fi
+ 
+ 
+@@ -7858,12 +7858,12 @@
+ 
+         if test -n "$PYTHON"; then
+       # If the user set $PYTHON, use it and don't search something else.
+-      { $as_echo "$as_me:$LINENO: checking whether $PYTHON version >= 2.4" >&5
+-$as_echo_n "checking whether $PYTHON version >= 2.4... " >&6; }
++      { $as_echo "$as_me:$LINENO: checking whether $PYTHON version >= 2.3" >&5
++$as_echo_n "checking whether $PYTHON version >= 2.3... " >&6; }
+       prog="import sys, string
+ # split strings by '.' and convert to numeric.  Append some zeros
+ # because we need at least 4 digits for the hex conversion.
+-minver = map(int, string.split('2.4', '.')) + [0, 0, 0]
++minver = map(int, string.split('2.3', '.')) + [0, 0, 0]
+ minverhex = 0
+ for i in xrange(0, 4): minverhex = (minverhex << 8) + minver[i]
+ sys.exit(sys.hexversion < minverhex)"
+@@ -33974,10 +33974,11 @@
+ { $as_echo "$as_me:$LINENO: result: $glib_cv___va_copy" >&5
+ $as_echo "$glib_cv___va_copy" >&6; }
+ 
+-if test "x$glib_cv_va_copy" = "xyes"; then
+-  g_va_copy_func=va_copy
+-else if test "x$glib_cv___va_copy" = "xyes"; then
++# Prefer __va_copy, available on both gcc2 and gcc3.
++if test "x$glib_cv___va_copy" = "xyes"; then
+   g_va_copy_func=__va_copy
++else if test "x$glib_cv_va_copy" = "xyes"; then
++  g_va_copy_func=va_copy
+ fi
+ fi
+ 
+@@ -36834,6 +36835,9 @@
+ 			G_THREAD_CFLAGS="-D_THREAD_SAFE"
+ 		fi
+ 		;;
++	*-darwin*)
++		# Nothing needed.
++		;;
+ 	*-dg-dgux*)  # DG/UX
+ 		G_THREAD_CFLAGS="-D_REENTRANT -D_POSIX4A_DRAFT10_SOURCE"
+ 		;;
+@@ -44203,9 +44207,10 @@
+ #define GLIB_MICRO_VERSION $GLIB_MICRO_VERSION
+ "
+ 
++# Prefer __va_copy, available on both gcc2 and gcc3.
+ case xyes in
+-x$glib_cv_va_copy)	glib_vacopy='#define G_VA_COPY	va_copy' ;;
+ x$glib_cv___va_copy)	glib_vacopy='#define G_VA_COPY	__va_copy' ;;
++x$glib_cv_va_copy)	glib_vacopy='#define G_VA_COPY	va_copy' ;;
+ *)			glib_vacopy=''
+ esac
+ 
+@@ -46172,8 +46177,11 @@
+ /* gcc-2.95.x supports both gnu style and ISO varargs, but if -ansi
+  * is passed ISO vararg support is turned off, and there is no work
+  * around to turn it on, so we unconditionally turn it off.
++ *
++ * On darwin, use gcc macro to avoid incompatibility between gcc2
++ * and gcc3.
+  */
+-#if __GNUC__ == 2 && __GNUC_MINOR__ == 95
++#if (__GNUC__ == 2 && __GNUC_MINOR__ == 95) || defined (__APPLE__)
+ #  undef G_HAVE_ISO_VARARGS
+ #endif
+ 
+diff -Nurd -x'*~' glib-2.18.1.orig/glib/gslice.c glib-2.18.1/glib/gslice.c
+--- glib-2.18.1.orig/glib/gslice.c	2008-09-17 18:33:57.000000000 -0400
++++ glib-2.18.1/glib/gslice.c	2008-10-05 10:30:48.000000000 -0400
+@@ -1131,19 +1131,18 @@
+                     gsize memsize)
+ {
+   gpointer aligned_memory = NULL;
+-  gint err = ENOMEM;
+ #if     HAVE_COMPLIANT_POSIX_MEMALIGN
++  gint err;
+   err = posix_memalign (&aligned_memory, alignment, memsize);
++  if (!aligned_memory)
++    errno = err;
+ #elif   HAVE_MEMALIGN
+-  errno = 0;
+   aligned_memory = memalign (alignment, memsize);
+-  err = errno;
+ #elif   HAVE_VALLOC
+-  errno = 0;
+   aligned_memory = valloc (memsize);
+-  err = errno;
+ #else
+   /* simplistic non-freeing page allocator */
++  gint err = ENOMEM;
+   mem_assert (alignment == sys_page_size);
+   mem_assert (memsize <= sys_page_size);
+   if (!compat_valloc_trash)
+@@ -1162,9 +1161,9 @@
+         }
+     }
+   aligned_memory = g_trash_stack_pop (&compat_valloc_trash);
+-#endif
+   if (!aligned_memory)
+     errno = err;
++#endif
+   return aligned_memory;
+ }
+ 
+diff -Nurd -x'*~' glib-2.18.3.orig/glib/gutils.h glib-2.18.3/glib/gutils.h
+--- glib-2.18.3.orig/glib/gutils.h	2008-11-24 00:45:23.000000000 -0500
++++ glib-2.18.3/glib/gutils.h	2009-01-08 01:16:50.000000000 -0500
+@@ -101,7 +101,11 @@
+ #  define G_INLINE_FUNC
+ #  undef  G_CAN_INLINE
+ #elif defined (__GNUC__) 
++#if defined(__APPLE_CC__) && (__APPLE_CC__ >= 5400)
++#  define G_INLINE_FUNC static inline
++#else
+ #  define G_INLINE_FUNC static __inline __attribute__ ((unused))
++#endif
+ #elif defined (G_CAN_INLINE) 
+ #  define G_INLINE_FUNC static inline
+ #else /* can't inline */
+diff -Nurd -x'*~' glib-2.18.1.orig/glib/libcharset/charset.alias glib-2.18.1/glib/libcharset/charset.alias
+--- glib-2.18.1.orig/glib/libcharset/charset.alias	1969-12-31 19:00:00.000000000 -0500
++++ glib-2.18.1/glib/libcharset/charset.alias	2008-09-25 01:46:38.000000000 -0400
+@@ -0,0 +1,111 @@
++# This file contains a table of character encoding aliases,
++# suitable for operating system 'darwin'.
++C			ASCII
++bg_BG			UTF-8
++bg_BG.CP1251		CP1251
++cs_CZ			UTF-8
++cs_CZ.ISO8859-2		ISO-8859-2
++da_DK			UTF-8
++da_DK.ISO8859-1		ISO-8859-1
++da_DK.ISO8859-15	ISO-8859-15
++de_AT			UTF-8
++de_AT.ISO8859-1		ISO-8859-1
++de_AT.ISO8859-15	ISO-8859-15
++de_CH			UTF-8
++de_CH.ISO8859-1		ISO-8859-1
++de_CH.ISO8859-15	ISO-8859-15
++de_DE			UTF-8
++de_DE.ISO8859-1		ISO-8859-1
++de_DE.ISO8859-15	ISO-8859-15
++en_AU			UTF-8
++en_AU.ISO8859-1		ISO-8859-1
++en_AU.ISO8859-15	ISO-8859-15
++en_AU.US-ASCII		ASCII
++en_CA			UTF-8
++en_CA.ISO8859-1		ISO-8859-1
++en_CA.ISO8859-15	ISO-8859-15
++en_CA.US-ASCII		ASCII
++en_GB			UTF-8
++en_GB.ISO8859-1		ISO-8859-1
++en_GB.ISO8859-15	ISO-8859-15
++en_GB.US-ASCII		ASCII
++en_US			UTF-8
++en_US.ISO8859-1		ISO-8859-1
++en_US.ISO8859-15	ISO-8859-15
++en_US.US-ASCII		ASCII
++es_ES			UTF-8
++es_ES.ISO8859-1		ISO-8859-1
++es_ES.ISO8859-15	ISO-8859-15
++fi_FI			UTF-8
++fi_FI.ISO8859-1		ISO-8859-1
++fi_FI.ISO8859-15	ISO-8859-15
++fr_BE			UTF-8
++fr_BE.ISO8859-1		ISO-8859-1
++fr_BE.ISO8859-15	ISO-8859-15
++fr_CA			UTF-8
++fr_CA.ISO8859-1		ISO-8859-1
++fr_CA.ISO8859-15	ISO-8859-15
++fr_CH			UTF-8
++fr_CH.ISO8859-1		ISO-8859-1
++fr_CH.ISO8859-15	ISO-8859-15
++fr_FR			UTF-8
++fr_FR.ISO8859-1		ISO-8859-1
++fr_FR.ISO8859-15	ISO-8859-15
++hr_HR			UTF-8
++hr_HR.ISO8859-2		ISO-8859-2
++hu_HU			UTF-8
++hu_HU.ISO8859-2		ISO-8859-2
++is_IS			UTF-8
++is_IS.ISO8859-1		ISO-8859-1
++is_IS.ISO8859-15	ISO-8859-15
++it_CH			UTF-8
++it_CH.ISO8859-1		ISO-8859-1
++it_CH.ISO8859-15	ISO-8859-15
++it_IT			UTF-8
++it_IT.ISO8859-1		ISO-8859-1
++it_IT.ISO8859-15	ISO-8859-15
++ja_JP			UTF-8
++ja_JP.EUC		EUC-JP
++ja_JP.SJIS		SHIFT_JIS
++ko_KR			UTF-8
++ko_KR.EUC		EUC-KR
++la_LN			UTF-8
++la_LN.ISO8859-1		ISO-8859-1
++la_LN.ISO8859-2		ISO-8859-2
++la_LN.ISO8859-4		ISO-8859-4
++la_LN.ISO8859-15	ISO-8859-15
++la_LN.US-ASCII		ASCII
++lt_LT			UTF-8
++lt_LT.ISO8859-4		ISO-8859-4
++nl_BE			UTF-8
++nl_BE.ISO8869-1		ISO-8859-1
++nl_BE.ISO8869-15	ISO-8859-15
++nl_NL			UTF-8
++nl_NL.ISO8869-1		ISO-8859-1
++nl_NL.ISO8869-15	ISO-8859-15
++no_NO			UTF-8
++no_NO.ISO8869-1		ISO-8859-1
++no_NO.ISO8869-15	ISO-8859-15
++pl_PL			UTF-8
++pl_PL.ISO8859-2		ISO-8859-2
++pt_PT			UTF-8
++pt_PT.ISO8859-1		ISO-8859-1
++pt_PT.ISO8859-15	ISO-8859-15
++ru_RU			UTF-8
++ru_RU.CP866		CP866
++ru_RU.ISO8859-5		ISO-8859-5
++ru_RU.KOI8-R		KOI8-R
++ru_RU.cp1251		CP1251
++ru_RU.koi8r		KOI8-R
++sl_SI			UTF-8
++sl_SI.ISO8859-2		ISO-8859-2
++sv_SE			UTF-8
++sv_SE.ISO8859-1		ISO-8859-1
++sv_SE.ISO8859-15	ISO-8859-15
++uk_UA			UTF-8
++uk_UA.KOI8-U		KOI8-U
++uk_UA.cp1251		CP1251
++zh_CN			UTF-8
++zh_CN.EUC		GB2312
++zh_TW			UTF-8
++zh_TW.Big5		BIG5
+diff -Nurd -x'*~' glib-2.18.3.orig/tests/Makefile.in glib-2.18.3/tests/Makefile.in
+--- glib-2.18.3.orig/tests/Makefile.in	2008-11-24 00:49:58.000000000 -0500
++++ glib-2.18.3/tests/Makefile.in	2009-01-08 01:16:50.000000000 -0500
+@@ -682,7 +682,7 @@
+ 	uri-test				\
+ 	regex-test
+ 
+-test_scripts = run-markup-tests.sh run-collate-tests.sh run-bookmark-test.sh
++test_scripts = run-markup-tests.sh run-bookmark-test.sh
+ test_script_support_programs = markup-test unicode-collate bookmarkfile-test
+ TESTS_ENVIRONMENT = srcdir=$(srcdir) \
+ 	LIBCHARSET_ALIAS_DIR=$(top_builddir)/glib/libcharset \
+diff -Nurd -x'*~' glib-2.18.1.orig/tests/child-test.c glib-2.18.1/tests/child-test.c
+--- glib-2.18.1.orig/tests/child-test.c	2008-09-17 18:33:52.000000000 -0400
++++ glib-2.18.1/tests/child-test.c	2008-09-25 01:48:08.000000000 -0400
+@@ -175,7 +175,7 @@
+ #ifdef G_OS_WIN32
+   system ("ipconfig /all");
+ #else
+-  system ("/bin/true");
++  system ("/usr/bin/true");
+ #endif
+ 
+   alive = 2;
